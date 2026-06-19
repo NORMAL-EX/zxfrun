@@ -26,6 +26,16 @@ const JUMP_V0 = 9.6
 const GRAVITY = 19
 const CLEAR_H = 0.62 // feet height that counts as "cleared" a low obstacle
 
+// platforming — low obstacles have a flat top you can land on and jump from
+const PLATFORM_TOP: Partial<Record<ObjType, number>> = { treadmill: 0.42, barrier: 0.72 }
+// half-depth of each obstacle along the track (for the contact band)
+const OBST_HZ: Record<string, number> = { barrier: 0.4, treadmill: 0.72, wall: 0.34, overhead: 0.32 }
+const PLAYER_HZ = 0.34 // player's half-depth
+const LAND_GRAB = 0.18 // how far above a top you can be and still snap onto it
+const CRASH_MARGIN = 0.14 // feet must be this close to the top or you hit the side
+const JUMP_BUFFER = 0.14 // press jump slightly early and it still fires on landing
+const COYOTE = 0.1 // brief grace to jump just after leaving a ledge
+
 const SPEECH_LINES = ['你跑不过我，你信吗？', '再加把劲，跟上！', '这点距离，不算什么！']
 
 interface Obj3 {
@@ -71,7 +81,18 @@ export class ThreeGame {
   private boxGeo = new THREE.BoxGeometry(1, 1, 1)
 
   // player
-  private player = { lane: 1, displayX: 0, y: 0, vy: 0, jumping: false, sliding: false, slideT: 0 }
+  private player = {
+    lane: 1,
+    displayX: 0,
+    y: 0,
+    vy: 0,
+    jumping: false,
+    sliding: false,
+    slideT: 0,
+    groundY: 0,
+    jumpBufT: 0,
+    coyoteT: 0,
+  }
   private root = new THREE.Group()
   private parts: Record<string, THREE.Object3D> = {}
 
@@ -308,34 +329,35 @@ export class ThreeGame {
       const g = new THREE.Group()
       const legMat = new THREE.MeshStandardMaterial({ color: 0x55606a, roughness: 0.7, metalness: 0.4 })
       for (const lx of [-0.66, 0.66]) {
-        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.86, 12), legMat)
-        leg.position.set(lx, 0.43, 0)
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.5, 12), legMat)
+        leg.position.set(lx, 0.25, 0)
         leg.castShadow = true
         g.add(leg)
       }
+      // solid flat top so you can land and stand on it (platform top = 0.72)
       const board = new THREE.Mesh(
-        this.rbox(LANE_OBJ_W, 0.56, 0.2, 0.1),
+        this.rbox(LANE_OBJ_W, 0.44, 0.7, 0.1),
         new THREE.MeshStandardMaterial({ color: 0xf0a01e, roughness: 0.6 }),
       )
-      board.position.set(0, 0.84, 0)
+      board.position.set(0, 0.5, 0)
       board.castShadow = true
       g.add(board)
-      // hazard stripes
+      // hazard stripes on the front face
       for (let i = -2; i <= 2; i++) {
         const s = new THREE.Mesh(
-          this.rbox(0.2, 0.52, 0.04, 0.02),
+          this.rbox(0.2, 0.4, 0.04, 0.02),
           new THREE.MeshStandardMaterial({ color: 0x1a1a1c }),
         )
-        s.position.set(i * 0.32, 0.84, 0.1)
+        s.position.set(i * 0.32, 0.5, 0.36)
         s.rotation.z = 0.5
         g.add(s)
       }
       // amber beacon
       const beacon = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 16, 12),
+        new THREE.SphereGeometry(0.1, 16, 12),
         new THREE.MeshStandardMaterial({ color: 0xffb338, emissive: 0xffae33, emissiveIntensity: 2 }),
       )
-      beacon.position.set(-0.72, 1.16, 0)
+      beacon.position.set(-0.72, 0.84, 0)
       g.add(beacon)
       this.templates.barrier = g
     }
@@ -746,7 +768,18 @@ export class ThreeGame {
   start() {
     for (const o of this.objs) this.release(o)
     this.objs = []
-    this.player = { lane: 1, displayX: 0, y: 0, vy: 0, jumping: false, sliding: false, slideT: 0 }
+    this.player = {
+      lane: 1,
+      displayX: 0,
+      y: 0,
+      vy: 0,
+      jumping: false,
+      sliding: false,
+      slideT: 0,
+      groundY: 0,
+      jumpBufT: 0,
+      coyoteT: 0,
+    }
     this.speed = 8
     this.totalDist = 0
     this.score = 0
@@ -815,23 +848,31 @@ export class ThreeGame {
   }
   jump() {
     if (this.state !== 'playing') return
-    if (this.player.sliding) {
-      this.player.sliding = false
-      this.player.slideT = 0
+    // buffer the press so an early tap still fires the instant we can jump
+    this.player.jumpBufT = JUMP_BUFFER
+    this.tryJump()
+  }
+  // fire a buffered jump if we're grounded (or within the coyote grace window)
+  private tryJump() {
+    const p = this.player
+    if (p.jumpBufT <= 0) return
+    const grounded = !p.jumping || p.coyoteT > 0
+    if (!grounded) return
+    if (p.sliding) {
+      p.sliding = false
+      p.slideT = 0
     }
-    if (!this.player.jumping) {
-      this.player.jumping = true
-      this.player.vy = JUMP_V0
-      this.sound.jump()
-    }
+    p.jumping = true
+    p.vy = JUMP_V0
+    p.coyoteT = 0
+    p.jumpBufT = 0
+    this.sound.jump()
   }
   slide() {
     if (this.state !== 'playing') return
-    // slam down if airborne, then crouch-slide
-    this.player.jumping = false
-    this.player.vy = 0
-    this.player.y = 0
-    if (!this.player.sliding) this.sound.land()
+    // slam down hard if airborne (lets you cut a jump short), then crouch-slide
+    if (this.player.jumping) this.player.vy = -28
+    else this.sound.land()
     this.player.sliding = true
     this.player.slideT = 0.62
   }
@@ -849,7 +890,11 @@ export class ThreeGame {
     return this.player.lane
   }
   isAirborne() {
-    return this.player.y > CLEAR_H
+    return this.player.jumping
+  }
+  // true when standing on top of a low obstacle (not the street)
+  isOnPlatform() {
+    return !this.player.jumping && this.player.groundY > 0.01
   }
   isSliding() {
     return this.player.sliding
@@ -874,6 +919,23 @@ export class ThreeGame {
       this.update(s)
       r -= s
     }
+  }
+  // test-only: snapshot of the player's vertical/lane state for assertions
+  debugPlayer() {
+    return {
+      y: this.player.y,
+      vy: this.player.vy,
+      jumping: this.player.jumping,
+      groundY: this.player.groundY,
+      lane: this.player.lane,
+      onPlatform: this.isOnPlatform(),
+    }
+  }
+  // test-only: place the player at a precise vertical state (above a platform)
+  debugSetAir(y: number, vy: number) {
+    this.player.y = y
+    this.player.vy = vy
+    this.player.jumping = y > 0.001
   }
 
   // ---------------- pooling ----------------
@@ -1015,18 +1077,40 @@ export class ThreeGame {
     const targetX = LANES[this.player.lane]
     this.player.displayX += (targetX - this.player.displayX) * Math.min(1, dt * 22)
 
-    // jump physics
-    if (this.player.jumping) {
-      this.player.vy -= GRAVITY * dt
-      this.player.y += this.player.vy * dt
-      if (this.player.y <= 0) {
-        this.player.y = 0
-        this.player.jumping = false
-        this.player.vy = 0
-        this.sound.land()
-        this.burst(new THREE.Vector3(this.player.displayX, 0.1, 0), 0x9a8f86, 7, 2, 0.2)
+    // platforming: find the support height under the player this frame (the
+    // street, or the flat top of a low obstacle we've landed on / are over)
+    let support = 0
+    for (const o of this.objs) {
+      if (o.done || o.lane !== this.player.lane) continue
+      const top = PLATFORM_TOP[o.type]
+      if (top === undefined) continue
+      const foot = OBST_HZ[o.type] + PLAYER_HZ * 0.5
+      if (Math.abs(o.z) < foot && this.player.y >= top - LAND_GRAB && top > support) {
+        support = top
       }
     }
+    this.player.groundY = support
+
+    // vertical physics — gravity always applies; we settle onto the support
+    this.player.vy -= GRAVITY * dt
+    this.player.y += this.player.vy * dt
+    if (this.player.y <= support) {
+      if (this.player.jumping && this.player.vy < -1) {
+        this.sound.land()
+        this.burst(new THREE.Vector3(this.player.displayX, support + 0.1, 0), 0x9a8f86, 7, 2, 0.2)
+      }
+      this.player.y = support
+      this.player.vy = 0
+      this.player.jumping = false
+      this.player.coyoteT = COYOTE
+    } else {
+      this.player.jumping = true
+    }
+    // input-window timers, then fire any buffered jump now we know we're grounded
+    this.player.coyoteT = Math.max(0, this.player.coyoteT - dt)
+    this.player.jumpBufT = Math.max(0, this.player.jumpBufT - dt)
+    this.tryJump()
+
     if (this.player.sliding) {
       this.player.slideT -= dt
       if (this.player.slideT <= 0) this.player.sliding = false
@@ -1069,26 +1153,32 @@ export class ThreeGame {
         o.mesh.rotation.set(-0.08, Math.sin(this.time * 1.4 + o.z * 0.3) * 0.4, -0.12)
         o.mesh.position.y = 1.35 + Math.sin(this.time * 2.4 + o.z * 0.4) * 0.09
       }
+
+      // continuous obstacle collision while the player's body overlaps it in z
+      const hz = OBST_HZ[o.type]
+      if (hz !== undefined && o.lane === this.player.lane && Math.abs(o.z) < hz + PLAYER_HZ) {
+        const top = PLATFORM_TOP[o.type]
+        if (top !== undefined) {
+          // low/standable — only crash if we slammed into the side (feet below top)
+          if (feet < top - CRASH_MARGIN) return this.gameOver('crash')
+        } else if (o.type === 'wall') {
+          return this.gameOver('crash') // too tall to clear — must switch lane
+        } else if (o.type === 'overhead') {
+          if (!this.player.sliding) return this.gameOver('crash')
+        }
+      }
+
+      // one-shot events as the object crosses the player plane
       if (!o.resolved && o.z >= 0) {
         o.resolved = true
-        const obstacle =
-          o.type === 'barrier' || o.type === 'treadmill' || o.type === 'overhead' || o.type === 'wall'
-        if (obstacle && Math.abs(o.lane - this.player.lane) === 1) {
+        if (hz !== undefined && Math.abs(o.lane - this.player.lane) === 1) {
           // near miss: threaded past an obstacle one lane over
           this.collectScore += 8
           this.sound.whoosh()
           this.burst(o.mesh.position, 0xffffff, 6, 3)
         }
         if (o.lane === this.player.lane) {
-          if (o.type === 'barrier' || o.type === 'treadmill') {
-            // low obstacles — jump over them
-            if (feet < CLEAR_H) return this.gameOver('crash')
-          } else if (o.type === 'wall') {
-            // tall — must switch lane (jumping/sliding won't help)
-            return this.gameOver('crash')
-          } else if (o.type === 'overhead') {
-            if (!this.player.sliding) return this.gameOver('crash')
-          } else if (o.type === 'ice') {
+          if (o.type === 'ice') {
             if (feet < CLEAR_H) {
               this.collect(50, 15)
               this.sound.coin()
