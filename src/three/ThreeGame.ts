@@ -5,14 +5,8 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import type { GameCallbacks, GameOverReason, ObjType, Screen } from '../game/types'
-import {
-  makeChocoTexture,
-  makeFacadeTexture,
-  makeRoadTexture,
-  makeSpriteLabel,
-  mulberry32,
-  type Rng,
-} from './textures'
+import { makeFacadeTexture, makeRoadTexture, mulberry32, type Rng } from './textures'
+import { makeIceCream, makeSpriteCan } from './collectibles'
 import { makeCar, makeLamp, makeTree } from './props'
 import { SoundManager } from '../game/sound'
 import { applySky, type SkyTargets } from './sky'
@@ -414,93 +408,9 @@ export class ThreeGame {
       this.templates.wall = g
     }
 
-    // 巧乐兹 — chocolate bar with a bitten cut-away revealing the layers:
-    // dark chunky coating → golden biscuit → white vanilla → choc-nut core.
-    {
-      const g = new THREE.Group()
-      const choc = new THREE.MeshStandardMaterial({ map: makeChocoTexture(), roughness: 0.36, metalness: 0.06 })
-      const bar = new THREE.Mesh(this.rbox(0.74, 1.55, 0.46, 0.26), choc)
-      bar.castShadow = true
-      g.add(bar)
-      // cut-away layers stacked toward the front (+z), framed by the chocolate
-      const golden = new THREE.Mesh(
-        this.rbox(0.56, 1.2, 0.08, 0.22),
-        new THREE.MeshStandardMaterial({ color: 0xd9a52e, roughness: 0.55 }),
-      )
-      golden.position.set(0, 0.2, 0.21)
-      g.add(golden)
-      const white = new THREE.Mesh(
-        this.rbox(0.42, 1.04, 0.09, 0.2),
-        new THREE.MeshStandardMaterial({ color: 0xfdf4e0, roughness: 0.6 }),
-      )
-      white.position.set(0, 0.22, 0.26)
-      g.add(white)
-      const core = new THREE.Mesh(
-        this.rbox(0.26, 0.92, 0.11, 0.12),
-        new THREE.MeshStandardMaterial({ color: 0x7a4a26, roughness: 0.4 }),
-      )
-      core.position.set(0, 0.24, 0.31)
-      g.add(core)
-      // nut bits embedded in the core
-      const nutMat = new THREE.MeshStandardMaterial({ color: 0xab7740, roughness: 0.6 })
-      const nutGeo = new THREE.SphereGeometry(0.036, 8, 6)
-      const rn = mulberry32(21)
-      for (let i = 0; i < 24; i++) {
-        const n = new THREE.Mesh(nutGeo, nutMat)
-        n.position.set((rn() - 0.5) * 0.18, 0.24 + (rn() - 0.5) * 0.84, 0.37)
-        g.add(n)
-      }
-      // crunchy nibs on the chocolate coating (sides / back / lower-front / bottom)
-      const nibMat = new THREE.MeshStandardMaterial({ color: 0x4a2c14, roughness: 0.75 })
-      const nibGeo = new THREE.SphereGeometry(0.05, 8, 6)
-      const r2 = mulberry32(13)
-      for (let i = 0; i < 46; i++) {
-        const nib = new THREE.Mesh(nibGeo, nibMat)
-        const face = Math.floor(r2() * 5)
-        const u = (r2() - 0.5) * 0.58
-        const v = (r2() - 0.5) * 1.42
-        if (face === 0) nib.position.set(u, Math.min(v, -0.45), 0.24) // lower front only
-        else if (face === 1) nib.position.set(u, v, -0.24)
-        else if (face === 2) nib.position.set(0.37, v, (r2() - 0.5) * 0.36)
-        else if (face === 3) nib.position.set(-0.37, v, (r2() - 0.5) * 0.36)
-        else nib.position.set(u, -0.79, (r2() - 0.5) * 0.36)
-        g.add(nib)
-      }
-      const stick = new THREE.Mesh(
-        this.rbox(0.15, 0.7, 0.15, 0.06),
-        new THREE.MeshStandardMaterial({ color: 0xe6c489, roughness: 0.85 }),
-      )
-      stick.position.y = -1.0
-      g.add(stick)
-      this.templates.ice = g
-    }
-
-    // 雪碧 — tall aluminium green can with silver top + pull-tab; wrapped label
-    {
-      const g = new THREE.Group()
-      const green = new THREE.MeshStandardMaterial({
-        map: makeSpriteLabel(),
-        roughness: 0.26,
-        metalness: 0.55,
-      })
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.5, 40), green)
-      body.castShadow = true
-      g.add(body)
-      const silver = new THREE.MeshStandardMaterial({ color: 0xccd2d6, roughness: 0.26, metalness: 0.9 })
-      const topRim = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.305, 0.12, 36), silver)
-      topRim.position.y = 0.78
-      g.add(topRim)
-      const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.255, 0.255, 0.03, 32), silver)
-      lid.position.y = 0.85
-      g.add(lid)
-      const botRim = new THREE.Mesh(new THREE.CylinderGeometry(0.305, 0.27, 0.1, 36), silver)
-      botRim.position.y = -0.78
-      g.add(botRim)
-      const tab = new THREE.Mesh(this.rbox(0.16, 0.02, 0.1, 0.01), silver)
-      tab.position.set(0, 0.87, 0.04)
-      g.add(tab)
-      this.templates.sprite = g
-    }
+    // collectibles (built by reusable factories — see src/three/collectibles.ts)
+    this.templates.ice = makeIceCream()
+    this.templates.sprite = makeSpriteCan()
 
     // overhead banner (slide under)
     {
