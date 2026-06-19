@@ -24,8 +24,9 @@ export function StartScreen({ best, onPlay }: Props) {
       {best > 0 && <div className="best-line">历史最高 {best}</div>}
       <div className="controls-hint">
         <span>← → / A D 换道</span>
-        <span>↑ / 空格 跳跃</span>
-        <span>手机：左右滑动换道，上滑跳跃</span>
+        <span>↑ / 空格 跳跃 · ↓ / S 滑铲</span>
+        <span>跳到矮障碍上可踩着跑，再起跳更高</span>
+        <span>手机：左右滑动换道，上滑跳跃，下滑滑铲</span>
       </div>
       <div className="disclaimer">本游戏纯属虚构娱乐，角色与情节均为创作，请勿对号入座</div>
     </div>
